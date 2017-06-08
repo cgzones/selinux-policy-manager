@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install --fail-missing
+
+override_dh_auto_build:
+	help2man -s 1 ./selinux_policy_manager -n "SELinux policy module manager" -o selinux_policy_manager.1

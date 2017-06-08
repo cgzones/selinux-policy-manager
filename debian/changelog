@@ -1,0 +1,5 @@
+selinux-policy-manager (0.1) UNRELEASED; urgency=high
+
+  * Initial release
+
+ -- Christian Göttsche <cgzones@googlemail.com>  Fri, 09 Jun 2017 00:02:00 +0200

@@ -1,0 +1,1220 @@
+#!/usr/bin/env python3
+
+
+import re
+import subprocess
+import os
+import sys
+import getopt
+import filecmp
+
+
+# colorid: black 0, red 1, green 2, yellow 3
+def custom_print(msg, prefix, colorid):
+    if sys.stdout.isatty():
+        # running in a real terminal
+        print(os.path.basename(sys.argv[0]) + ': \033[1;' + str(30 + colorid) + 'm' + prefix + '\033[0m ' + msg)
+    else:
+        # no color support, e.g. redirection
+        print(os.path.basename(sys.argv[0]) + ': ' + msg)
+
+def bold(msg):
+    if sys.stdout.isatty():
+        # running in a real terminal
+        return '\033[1m' + msg + '\033[0m'
+    else:
+        # no color support, e.g. redirection
+        return msg
+
+def error(msg):
+    custom_print(msg, 'ERROR  ', 1)
+
+def warn(msg):
+    custom_print(msg, 'WARNING', 3)
+
+def notice(msg):
+    custom_print(msg, 'NOTICE ', 3)
+
+def report(msg):
+    custom_print(msg, 'REPORT ', 2)
+
+quiet = False
+def info(msg):
+    if not quiet:
+        custom_print(msg, 'INFO   ', 2)
+
+def arr2str(array):
+    if isinstance(array, str):
+        return array + ' '
+    return ''.join(x + ' ' for x in array)
+
+# return True if both files have the same content, else False
+def check_files_equals(a, b):
+    if not os.path.isfile(a):
+        error('Can not find file ' + bold(a))
+        exit(1)
+    if not os.path.isfile(b):
+        error('Can not find file ' + bold(b))
+        exit(1)
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+
+    return filecmp.cmp(a, b)
+
+
+# return list of elemenst contained in a but not in b
+# IMPORTANT: a and b must be sorted
+def list_difference(a, b):
+    a_len = len(a)
+    b_len = len(b)
+
+    retval = []
+
+    a_index = 0
+    b_index = 0
+    while a_index < a_len and b_index < b_len:
+        if b[b_index] < a[a_index]:
+            b_index += 1
+        elif b[b_index] > a[a_index]:
+            retval.append(a[a_index])
+            a_index += 1
+        else:
+            a_index += 1
+            b_index += 1
+
+    retval.extend(a[a_index:])
+    return retval
+
+
+# return list of elements only contained in both a and b
+# IMPORTANT: a and b must be sorted
+def list_intersect(a, b):
+    a_len = len(a)
+    b_len = len(b)
+
+    retval = []
+
+    a_index = 0
+    b_index = 0
+    while a_index < a_len and b_index < b_len:
+        if b[b_index] < a[a_index]:
+            b_index += 1
+        elif b[b_index] > a[a_index]:
+            a_index += 1
+        else:
+            retval.append(b[b_index])
+            b_index += 1
+            a_index += 1
+
+    return retval
+
+
+# return True if element exists in list, else False
+# IMPORTANT: list must be sorted
+def list_search(lst, e):
+    start = 0
+    end = len(lst)
+
+    while start < end:
+        test_pos = (end-start)//2 + start
+        test_e = lst[test_pos]
+        if test_e < e:
+            start = test_pos + 1
+        elif test_e > e:
+            end = test_pos
+        else:
+            return True
+
+    return False
+
+
+# check if package exists in current apt cache
+def package_exist(package):
+    cp = subprocess.run(['/usr/bin/apt-cache', 'show', package], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, universal_newlines=True)
+    retval = cp.returncode
+    if retval is 0:
+        return True, ''
+
+    if retval is 100:
+        return False, (str(cp.stderr)).rstrip(' \t\n')
+
+    error('Unknown apt-cache return value for package ' + package + ': ' + str(cp))
+
+    return False, ''
+
+
+# check whether the list is sorted
+def is_sorted(lst):
+    it = iter(lst)
+    next(it, None)
+    return all(b >= a for a, b in zip(lst, it))
+
+
+# mapping SELinux module name => debian packages|KEYWORD
+# keywords:
+#        !nodebian    module is for software not available indebian
+#        !seldep      module depends on package with the same name
+#        !optional    module is optional and depends on no specific paackage
+#        !required    module is required for debian and depends on no specific package
+debmap = {
+        'base'             : '!required',
+        'auditadm'         : '!optional',
+        'guest'            : '!optional',
+        'logadm'           : '!optional',
+        'secadm'           : '!optional',
+        'webadm'           : '!optional',
+        'xguest'           : '!optional',
+        'accountsd'        : 'accountsservice',
+        'acct'             : '!selfdep',
+        'ada'              : [ 'gnat-4.4', 'gnat-4.6', 'gnat-4.8', 'gnat-4.9', 'gnat-5', 'gnat-6' ],
+        'afs'              : [ 'openafs-client', 'openafs-fileserver' ],
+        'aiccu'            : '!selfdep',
+        'aide'             : [ 'aide', 'aide-dynamic', 'aide-xen' ],
+        'alsa'             : 'alsa-utils',
+        'amanda'           : 'amanda-common',
+        'amavis'           : 'amavisd-new',
+        'apache'           : 'apache2',
+        'apcupsd'          : '!selfdep',
+        'apt'              : '!selfdep',
+        'acpi'             : [ 'apmd', 'acpid' ],
+        'arpwatch'         : '!selfdep',
+        'asterisk'         : '!selfdep',
+        'automount'        : 'autofs',
+        'avahi'            : [ 'avahi-dnsconfd', 'avahi-daemon', 'avahi-autoipd' ],
+        'awstats'          : '!selfdep',
+        'bacula'           : 'bacula-common',
+        'bcfg2'            : '!selfdep',
+        'bind'             : [ 'unbound', 'bind9utils', 'lwresd' ],
+        'bird'             : '!selfdep',
+        'bitlbee'          : [ 'bip', 'bitlbee' ],
+        'blueman'          : '!selfdep',
+        'bluetooth'        : 'bluez',
+        'boinc'            : 'boinc-client',
+        'bootloader'       : 'grub-pc',
+        'brctl'            : 'bridge-utils',
+        'cachefilesd'      : '!selfdep',
+        'calamaris'        : '!selfdep',
+        'canna'            : 'canna-utils',
+        'cdrecord'         : [ 'wodim', 'growisofs' ],
+        'certmonger'       : '!selfdep',
+        'cfengine'         : 'cfengine3',
+        'cgroup'           : [ 'cgroup-bin' , 'cgroup-tools' ],
+        'chkrootkit'       : '!selfdep',
+        'chronyd'          : 'chrony',
+        'clamav'           : [ 'clamav', 'clamav-daemon', 'clamdscan', 'clamav-freshclam', 'clamav-milter' ],
+        'cobbler'          : '!selfdep',
+        'collectd'         : 'collectd-core',
+        'colord'           : '!selfdep',
+        'comsat'           : 'biff',
+        'condor'           : '!selfdep',
+        'consolekit'       : '!selfdep',
+        'corosync'         : '!selfdep',
+        'couchdb'          : '!selfdep',
+        'courier'          : 'courier-authlib',
+        'cpucontrol'       : 'cpufreqd',
+        'cpufreqselector'  : 'gnome-applets',
+        'cron'             : [ 'cron', 'anacron' ],
+        'ctdb'             : '!selfdep',
+        'cups'             : 'cups-client',
+        'cvs'              : '!selfdep',
+        'cyphesis'         : 'cyphesis-cpp',
+        'cyrus'            : 'cyrus-common',
+        'daemontools'      : '!selfdep',
+        'dante'            : 'dante-server',
+        'dbadm'            : '!optional',
+        'dbskk'            : 'dbskkd-cdb',
+        'dbus'             : '!selfdep',
+        'ddclient'         : '!selfdep',
+        'denyhosts'        : '!selfdep',
+        'devicekit'        : [ 'upower', 'udisks' ],
+        'dhcp'             : 'isc-dhcp-server',
+        'dictd'            : '!selfdep',
+        'dirmngr'          : '!selfdep',
+        'distcc'           : '!selfdep',
+        'djbdns'           : [ 'dbndns', 'djbdns' ],
+        'dkim'             : 'opendkim',
+        'dmidecode'        : '!selfdep',
+        'dnsmasq'          : 'dnsmasq-base',
+        'dnssectrigger'    : 'dnssec-trigger',
+        'dovecot'          : 'dovecot-core',
+        'dphysswapfile'    : 'dphys-swapfile',
+        'drbd'             : 'drbd-utils',
+        'dspam'            : '!selfdep',
+        'dtdnssync'        : '!selfdep',
+        'entropyd'         : 'haveged',
+        'evolution'        : '!selfdep',
+        'exim'             : 'exim4-base',
+        'fail2ban'         : '!selfdep',
+        'fakehwclock'      : 'fake-hwclock',
+        'fancontrol'       : '!selfdep',
+        'fcoe'             : 'fcoe-utils',
+        'fetchmail'        : '!selfdep',
+        'finger'           : 'cfingerd',
+        'firewalld'        : '!selfdep',
+        'fprintd'          : '!selfdep',
+        'ftp'              : [ 'proftpd-basic', 'vsftpd' ],
+        'gatekeeper'       : 'gnugk',
+        'gdomap'           : 'gnustep-base-runtime',
+        'geoclue'          : 'geoclue-2.0',
+        'getty'            : 'util-linux',
+        'git'              : '!optional',
+        'glance'           : 'glance-common',
+        'glusterfs'        : 'glusterfs-common',
+        'gnome'            : 'gconf2-common',
+        'gpg'              : 'gpgv',
+        'gpm'              : '!selfdep',
+        'gpsd'             : '!selfdep',
+        'hadoop'           : 'zookeeperd',
+        'hal'              : 'radeontool',
+        'hddtemp'          : '!selfdep',
+        'hostname'         : '!selfdep',
+        'hotplug'          : 'netplug',
+        'hwloc'            : '!selfdep',
+        'hypervkvp'        : 'hyperv-daemons',
+        'ifplugd'          : '!selfdep',
+        'inetd'            : [ 'pidentd', 'openbsd-inetd', 'xinetd', 'rlinetd' ],
+        'inn'              : [ 'inn', 'inn2-inews', 'suck' ],
+        'iodine'           : '!selfdep',
+        'ipsec'            : [ 'strongswan-starter', 'racoon', 'strongswan-swanctl', 'ipsec-tools', 'openswan' ],
+        'iptables'         : [ 'ebtables', 'iptables', 'ipvsadm', 'nft' ],
+        'irc'              : [ 'ircii', 'irssi', 'tinyirc' ],
+        'ircd'             : [ 'ircd-irc2', 'ngircd' ],
+        'irqbalance'       : '!selfdep',
+        'iscsi'            : 'open-iscsi',
+        'jabber'           : 'ejabberd',
+        'java'             : 'java-common',
+        'kdump'            : 'kexec-tools',
+        'kerberos'         : [ 'krb5-kdc', 'krb5-admin-server' ],
+        'kerneloops'       : '!selfdep',
+        'keystone'         : '!selfdep',
+        'kismet'           : '!selfdep',
+        'ksmtuned'         : '!selfdep',
+        'ktalk'            : [ 'talkd', 'inetutils-talkd' ],
+        'l2tp'             : 'xl2tpd',
+        'ldap'             : 'slapd',
+        'lightsquid'       : '!selfdep',
+        'lircd'            : 'lirc',
+        'lldpad'           : '!selfdep',
+        'loadkeys'         : 'kbd',
+        'logrotate'        : '!selfdep',
+        'logwatch'         : [ 'epylog', 'logcheck', 'logwatch' ],
+        'lpd'              : 'cups-client',
+        'lvm'              : [ 'lvm2', 'dmsetup' ],
+        'mailman'          : '!selfdep',
+        'man2html'         : 'man2html-base',
+        'mandb'            : 'man-db',
+        'mcelog'           : '!selfdep',
+        'memcached'        : '!selfdep',
+        'milter'           : [ 'spamass-milter', 'sqlgrey', 'milter-greylist' ],
+        'minidlna'         : '!selfdep',
+        'minissdpd'        : '!selfdep',
+        'modemmanager'     : '!selfdep',
+        'mojomojo'         : 'libmojomojo-perl',
+        'mon'              : '!selfdep',
+        'mongodb'          : 'mongodb-server',
+        'monit'            : '!selfdep',
+        'mono'             : 'mono-runtime',
+        'monop'            : 'monopd',
+        'mozilla'          : [ 'epiphany-browser', 'iceweasel', 'firefox', 'firefox-esr' ],
+        'mpd'              : '!selfdep',
+        'mplayer'          : [ 'vlc-nox', 'mplayer2', 'mencoder', 'xine-ui' ],
+        'mrtg'             : '!selfdep',
+        'mta'              : [ 'esmtp', 'ssmtp', 'courier-mta', 'exim4-daemon-heavy', 'exim4-daemon-light',
+                               'masqmail', 'postfix', 'rmail', 'sendmail-base', 'opensmtpd', 'dma',
+                               'msmtp-mta', 'nullmailer', 'qmail-run', 'xmail' ],
+        'munin'            : 'munin-common',
+        'mysql'            : [ 'mysql-server', 'mariadb-server' ],
+        'ncftool'          : 'netcf',
+        'netutils'         : [ 'iputils-ping', 'traceroute', 'iputils-arping' ],
+        'nis'              : '!selfdep',
+        'nscd'             : '!selfdep',
+        'nsd'              : '!selfdep',
+        'nslcd'            : '!selfdep',
+        'ntp'              : [ 'ntp', 'ntpdate', 'openntpd' ],
+        'numad'            : '!selfdep',
+        'nut'              : [ 'nut-client', 'nut-server' ],
+        'obex'             : 'obex-data-server',
+        'oddjob'           : '!selfdep',
+        'oident'           : 'oidentd',
+        'openct'           : '!selfdep',
+        'openhpi'          : 'openhpid',
+        'openvpn'          : '!selfdep',
+        'openvswitch'      : 'openvswitch-common',
+        'pacemaker'        : '!selfdep',
+        'pads'             : '!selfdep',
+        'passenger'        : '!selfdep',
+        'pcscd'            : '!selfdep',
+        'perdition'        : '!selfdep',
+        'pingd'            : 'echolot',
+        'pkcs'             : 'opencryptoki',
+        'plymouthd'        : 'plymouth',
+        'policykit'        : 'policykit-1',
+        'polipo'           : '!selfdep',
+        'portreserve'      : '!selfdep',
+        'postfix'          : '!selfdep',
+        'postgresql'       : 'postgresql-client-common',
+        'postgrey'         : '!selfdep',
+        'ppp'              : '!selfdep',
+        'prelink'          : '!selfdep',
+        'prelude'          : [ 'prelude-manager', 'audispd-plugins', 'prelude-lml', 'prelude-correlator' ],
+        'privoxy'          : '!selfdep',
+        'procmail'         : '!selfdep',
+        'psad'             : '!selfdep',
+        'ptchown'          : '!optional',
+        'pulseaudio'       : '!selfdep',
+        'puppet'           : '!selfdep',
+        'pwauth'           : '!selfdep',
+        'pyicqt'           : '!selfdep',
+        'pyzor'            : '!selfdep',
+        'qemu'             : [ 'qemu-kvm', 'qemu-system-misc', 'qemu-system' ],
+        'qmail'            : '!selfdep',
+        'qpid'             : 'qpidd',
+        'quota'            : '!selfdep',
+        'radius'           : [ 'freeradius', 'radiusd-livingston' ],
+        'radvd'            : '!selfdep',
+        'raid'             : 'mdadm',
+        'razor'            : '!selfdep',
+        'realmd'           : '!selfdep',
+        'redis'            : 'redis-server',
+        'remotelogin'      : [ 'rsh-redone-server', 'rsh-server', 'telnetd-ssl', 'telnetd', 'inetutils-telnetd' ], # remotelogin is a telnet/rlogin dependency
+        'rgmanager'        : [ 'cman', 'rgmanager' ],
+        'rkhunter'         : '!selfdep',
+        'rlogin'           : [ 'rsh-redone-server', 'rsh-server', 'telnetd-ssl', 'telnetd' ],
+        'rngd'             : 'rng-tools',
+        'rpcbind'          : '!selfdep',
+        'rpm'              : '!selfdep',
+        'rshd'             : [ 'rsh-server', 'rsh-redone-server' ],
+        'rssh'             : '!selfdep',
+        'rsync'            : '!optional',
+        'rtkit'            : '!selfdep',
+        'rwho'             : 'rwhod',
+        'samba'            : '!selfdep',
+        'samhain'          : '!selfdep',
+        'sanlock'          : '!selfdep',
+        'screen'           : '!selfdep',
+        'sddm'             : '!selfdep',
+        'sendmail'         : 'sendmail-base',
+        'setrans'          : 'mcstrans',
+        'seunshare'        : 'policycoreutils-sandbox',
+        'shibboleth'       : 'shibboleth-sp2-utils',
+        'shorewall'        : [ 'shorewall6', 'shorewall-lite' ],
+        'slpd'             : '!selfdep',
+        'slrnpull'         : '!selfdep',
+        'smartmon'         : 'smartmontools',
+        'smokeping'        : '!selfdep',
+        'smstools'         : [ 'smstools', 'gnokii-smsd' ],
+        'snmp'             : [ 'snmp', 'snmpd' ],
+        'snort'            : '!selfdep',
+        'sosreport'        : '!selfdep',
+        'soundserver'      : 'nas',
+        'spamassassin'     : [ 'mimedefang', 'spamc', 'spamassassin' ],
+        'squid'            : '!selfdep',
+        'ssh'              : [ 'openssh-server', 'openssh-client' ],
+        'sssd'             : 'sssd-common',
+        'stunnel'          : 'stunnel4',
+        'su'               : 'login',
+        'sudo'             : '!selfdep',
+        'svnserve'         : 'subversion',
+        'sxid'             : '!selfdep',
+        'syncthing'        : '!selfdep',
+        'sysstat'          : '!selfdep',
+        'systemtap'        : 'systemtap-server',
+        'tcpd'             : '!selfdep',
+        'tcsd'             : 'trousers',
+        'telepathy'        : 'libtelepathy-glib0',
+        'telnet'           : [ 'inetutils-telnetd', 'telnetd', 'telnetd-ssl' ],
+        'tftp'             : 'atftpd',
+        'tgtd'             : 'tgt',
+        'thunderbird'      : 'icedove',
+        'timidity'         : '!selfdep',
+        'tmpreaper'        : '!selfdep',
+        'tmux'             : '!selfdep',
+        'tor'              : '!selfdep',
+        'tripwire'         : '!selfdep',
+        'tvtime'           : '!selfdep',
+        'usbguard'         : '!selfdep',
+        'ucspitcp'         : [ 'ucspi-tcp', 'ucspi-tcp-ipv6' ],
+        'ulogd'            : 'ulogd2',
+        'uml'              : 'uml-utilities',
+        'unconfined'       : '!required',
+        'uptime'           : 'uptimed',
+        'usbmuxd'          : '!selfdep',
+        'userhelper'       : 'usermode',
+        'uucp'             : '!selfdep',
+        'uuidd'            : 'uuid-runtime',
+        'varnishd'         : 'varnish',
+        'vbetool'          : '!selfdep',
+        'vdagent'          : 'spice-vdagent',
+        'virt'             : [ 'xen-utils-common', 'libvirt-daemon', 'qemu-system-common', 'libvirt-clients' ],
+        'vlock'            : '!selfdep',
+        'vnstatd'          : 'vnstat',
+        'vpn'              : [ 'openconnect', 'vpnc' ],
+        'watchdog'         : '!selfdep',
+        'wdmd'             : 'sanlock',
+        'webalizer'        : [ 'webalizer', 'awffull' ],
+        'wine'             : '!selfdep',
+        'wireshark'        : [ 'wireshark', 'wireshark-qt' ],
+        'wm'               : [ 'openbox', 'metacity', 'twm', 'gnome-shell' ],
+        'xen'              : [ 'blktap-utils', 'xen-utils-common' ],
+        'xfs'              : 'xfstt',
+        'xscreensaver'     : '!selfdep',
+        'xserver'          : 'xserver-xorg-core',
+        'zabbix'           : [ 'zabbix-server-mysql', 'zabbix-server-pgsql', 'zabbix-agent' ],
+        'zebra'            : 'quagga',
+        'zosremote'        : 'audispd-plugins',
+        'abrt'             : '!nodebian',
+        'aisexec'          : '!nodebian',
+        'amtu'             : '!nodebian',
+        'anaconda'         : '!nodebian',
+        'authbind'         : '!nodebian',
+        'bugzilla'         : '!nodebian',
+        'callweaver'       : '!nodebian',
+        'ccs'              : '!nodebian',
+        'certmaster'       : '!nodebian',
+        'certwatch'        : '!nodebian',
+        'cipe'             : '!nodebian',
+        'clockspeed'       : '!nodebian',
+        'clogd'            : '!nodebian',
+        'cmirrord'         : '!nodebian',
+        'consoletype'      : '!nodebian',
+        'dcc'              : '!nodebian',
+        'ddcprobe'         : '!nodebian',
+        'firewallgui'      : '!nodebian',
+        'firstboot'        : '!nodebian',
+        'games'            : '!nodebian',
+        'gift'             : '!nodebian',
+        'gitosis'          : '!nodebian',
+        'gnomeclock'       : '!nodebian',
+        'howl'             : '!nodebian',
+        'i18n_input'       : '!nodebian',
+        'icecast'          : '!nodebian',
+        'imaze'            : '!nodebian',
+        'isns'             : '!nodebian',
+        'jockey'           : '!nodebian',
+        'kdumpgui'         : '!nodebian',
+        'keyboardd'        : '!nodebian',
+        'kudzu'            : '!nodebian',
+        'likewise'         : '!nodebian',
+        'livecd'           : '!nodebian',
+        'lockdev'          : '!nodebian',
+        'lsm'              : '!nodebian',
+        'mailscanner'      : '!nodebian',
+        'mediawiki'        : '!nodebian',
+        'nagios'           : '!nodebian',
+        'nessus'           : '!nodebian',
+        'netlabel'         : '!nodebian',
+        'ntop'             : '!nodebian',
+        'nx'               : '!nodebian',
+        'oav'              : '!nodebian',
+        'openca'           : '!nodebian',
+        'openoffice'       : '!nodebian',
+        'pcmcia'           : '!nodebian',
+        'pegasus'          : '!nodebian',
+        'podsleuth'        : '!nodebian',
+        'portage'          : '!nodebian',
+        'portmap'          : '!nodebian',
+        'portslave'        : '!nodebian',
+        'postfixpolicyd'   : '!nodebian',
+        'publicfile'       : '!nodebian',
+        'pxe'              : '!nodebian',
+        'quantum'          : '!nodebian',
+        'rabbitmq'         : '!nodebian',
+        'rdisc'            : '!nodebian',
+        'readahead'        : '!nodebian',
+        'resmgr'           : '!nodebian',
+        'rhcs'             : '!nodebian',
+        'rhgb'             : '!nodebian',
+        'rhsmcertd'        : '!nodebian',
+        'ricci'            : '!nodebian',
+        'roundup'          : '!nodebian',
+        'rpc'              : '!nodebian',
+        'sambagui'         : '!nodebian',
+        'sasl'             : '!nodebian',
+        'sblim'            : '!nodebian',
+        'sectoolm'         : '!nodebian',
+        'sensord'          : '!nodebian',
+        'setroubleshoot'   : '!nodebian',
+        'shutdown'         : '!nodebian',
+        'slocate'          : '!nodebian',
+        'smoltclient'      : '!nodebian',
+        'speedtouch'       : '!nodebian',
+        'tboot'            : '!nodebian',
+        'transproxy'       : '!nodebian',
+        'tuned'            : '!nodebian',
+        'tzdata'           : '!nodebian',
+        'updfstab'         : '!nodebian',
+        'usbmodules'       : '!nodebian',
+        'usernetctl'       : '!nodebian',
+        'uwimap'           : '!nodebian',
+        'vhostmd'          : '!nodebian',
+        'vmware'           : '!nodebian',
+        'w3c'              : '!nodebian',
+        'xprint'           : '!nodebian',
+        'yam'              : '!nodebian',
+        'zarafa'           : '!nodebian',
+}
+
+
+# help2man -s 1 selinux_policy_manager -n "SELinux policy module manager" -o selinux_policy_manager.1
+def usage():
+    print(os.path.basename(sys.argv[0]))
+    print('    -h --help                        Show this usage information')
+    print('    -V --version                     Show the version information')
+    print('    -q --quiet                       Show only minimal output, designed for script usage')
+    print('')
+    print('    -s --se_type     SELinux_type    Set SELinux policy type (e.g. default/refpolicy/...), like SELINUXTYPE=default in /etc/selinux/config')
+    print('                                     Defaults to current active type')
+    print('    -f --force       kind            Run proposed commands of type kind')
+    print('                                         Options are:')
+    print('                                             install:             install required distribution module(s)')
+    print('                                             remove:              remove unrequired distribution module(s)')
+    print('                                             disable-unknown:     disable unknown modules installed as distribution modules')
+    print('                                             update:              update outdated distribution module(s)')
+    print('                                             manage:              install && remove && disable-unknown && update')
+    print('                                             remove-alluser:      remove all user modules; only intended for upgrades')
+    print('    -c --nocheck                     Skip several checks infavour of performance')
+    print('    -D --dpkg                        Accept DPkg::Pre-Install-Pkgs formatted stdin')
+    print('    -R --restorecon                  Run \'restorecon -vv -R -n /\' after policy modification to test for mislabeled files')
+    print('                                     This will NOT alter file contexts')
+    print('    -a --apt_search                  Check all packages from mapping for existence in apt cache (very slow)')
+
+
+def main(argv):
+
+    run_checks = True
+    selinux_type = None
+    force_install = False
+    force_remove = False
+    force_disable_unknown = False
+    force_update = False
+    force_modules_install = []
+    force_modules_remove = []
+    force_modules_disable_unknown = []
+    force_modules_update = []
+    force_remove_alluser = False
+    dpkg_input = False
+    apt_search = False
+    run_restorecon = False
+    global quiet #pylint: disable=global-statement
+
+    try:
+        opts, args = getopt.getopt(argv, 'hVqs:f:cDaR', ['help', 'version', 'quiet', 'se_type=', 'force=', 'nocheck', 'dpkg', 'apt_search', 'restorecon'])
+    except getopt.GetoptError as err:
+        error('Invalid option(s): ' + str(err))
+        usage()
+        exit(1)
+    if len(args) is not 0:
+        error('Invalid option(s): ' + str(args))
+        exit(1)
+    for opt, arg in opts:
+        if opt in ('-h', '--help'):
+            usage()
+            exit(0)
+        elif opt in ('-V', '--version'):
+            print(os.path.basename(sys.argv[0]) + ' version 0.1dev')
+            exit(0)
+        elif opt in ('-q', '--quiet'):
+            quiet = True
+        elif opt in ('-s', '--se_type'):
+            selinux_type = arg
+        elif opt in ('-f', '--force'):
+            if arg == 'install':
+                force_install = True
+            elif arg == 'remove':
+                force_remove = True
+            elif arg == 'disable-unknown':
+                force_disable_unknown = True
+            elif arg == 'update':
+                force_update = True
+            elif arg == 'manage':
+                force_install = True
+                force_remove = True
+                force_disable_unknown = True
+                force_update = True
+            elif arg == 'remove-alluser':
+                force_remove_alluser = True
+            else:
+                error('Unknown --force option ' + arg)
+                exit(1)
+        elif opt in ('-c', '--nocheck'):
+            run_checks = False
+        elif opt in ('-D', '--dpkg'):
+            dpkg_input = True
+        elif opt in ('-a', '--apt_search'):
+            apt_search = True
+        elif opt in ('-R', '--restorecon'):
+            run_restorecon = True
+        else:
+            error('Invalid option ' + opt)
+            usage()
+            exit(1)
+
+
+    # get current active SELinux type
+    selinux_active_type = None
+    selinux_disabled = False
+    pattern1 = re.compile(r'^Loaded policy name:\s*(\S+)$')
+    pattern2 = re.compile(r'^SELinux status:\s*disabled$')
+    cp = subprocess.run('/usr/sbin/sestatus', stdout=subprocess.PIPE, universal_newlines=True, check=True)
+    for line in cp.stdout.splitlines():
+        m = re.match(pattern1, line)
+        if m:
+            selinux_active_type = m.group(1)
+            if not selinux_type:
+                selinux_type = selinux_active_type
+            break
+        m = re.match(pattern2, line)
+        if m:
+            selinux_disabled = True
+            warn('SELinux is currently disabled')
+            break
+    del cp, pattern2, pattern1
+    if not selinux_active_type and not selinux_disabled:
+        error('Can not determine current active SELinux type')
+        exit(1)
+    if not selinux_type:
+        error('SELinux type not set, please use the --se_type option')
+        exit(1)
+    if selinux_type == selinux_active_type:
+        info('Working on active SELinux type: ' + selinux_type)
+    elif selinux_disabled:
+        notice('Working on inactive SELinux type ' + bold(selinux_type) + ' cause SELinux is currently disabled')
+    else:
+        notice('Working on inactive SELinux type ' + bold(selinux_type) + ', active type is ' + selinux_active_type)
+    del selinux_disabled
+
+
+    # get selinux boot type
+    selinux_config = '/etc/selinux/config'
+    if not os.path.isfile(selinux_config):
+        error('No SELinux configuration found at ' + bold(selinux_config))
+        exit(1)
+    lines = []
+    with open(selinux_config, 'r') as f:
+        lines = f.read().splitlines()
+    pattern = re.compile(r'^([A-Z]+)\s*=\s*([a-z0-9]+)\s*$')
+    selinux_boot_type = None
+    selinux_boot_activ = None
+    for line in lines:
+        # skip comments
+        if not line or line.startswith('#'):
+            continue
+        m = re.match(pattern, line)
+        if m:
+            option = m.group(1)
+            value = m.group(2)
+
+            if option == 'SELINUXTYPE':
+                selinux_boot_type = value
+            elif option == 'SELINUX':
+                selinux_boot_activ = value
+            continue
+        error('Unsupported line in ' + bold(selinux_config) + ': ' + line)
+        exit(1)
+    del pattern, lines
+    if not selinux_boot_type:
+        error('Option ' + bold('SELINUXTYPE') + ' not set in ' + bold(selinux_config))
+        exit(1)
+    elif selinux_boot_type != selinux_type:
+        notice('Working on not booted SELinux type ' + bold(selinux_type) + ', booted type is ' + bold(selinux_boot_type))
+    else:
+        info('Working on booted SELinux type: ' + selinux_boot_type)
+    if not selinux_boot_activ:
+        error('Option ' + bold('SELINUX') + ' not set in ' + bold(selinux_config))
+        exit(1)
+    elif selinux_boot_activ == 'disabled':
+        notice('SELinux is set to disabled on boot')
+    elif selinux_boot_activ in ('permissive', 'enforcing'):
+        info('SELinux is set active on boot')
+    else:
+        error('Unsupported value ' + bold(selinux_boot_activ) + ' for option ' + bold('SELINUX') + ' in ' + bold(selinux_config))
+        exit(1)
+    del selinux_boot_activ, selinux_boot_type, selinux_config
+
+
+    # find module storage
+    modulestorage_path = '/usr/share/selinux/' + selinux_type + '/'
+    if not os.path.isdir(modulestorage_path):
+        error('No SELinux policy storage at ' + bold(modulestorage_path))
+        exit(1)
+
+    if os.path.isfile(modulestorage_path + 'base.pp'):
+        ending = '.pp'
+    elif os.path.isfile(modulestorage_path + 'base.pp.bz2'):
+        ending = '.pp.bz2'
+    else:
+        error('Unknown policy module file ending or no base policy module in ' + bold(modulestorage_path))
+        exit(1)
+
+
+    # get basemodules list
+    basemodules = []
+    basemoduleslist_path = modulestorage_path + '.basemodules'
+    if not os.path.isfile(basemoduleslist_path):
+        error('No .basemodules file found at ' + bold(basemoduleslist_path))
+        exit(1)
+    with open(basemoduleslist_path, 'r') as f:
+        basemodules = f.read().splitlines()
+    basemodules.sort()
+    if len(basemodules) is 0:
+        error('Basemodules list ' + bold(basemoduleslist_path) + ' is empty')
+        exit(1)
+    pattern = re.compile(r'^\s*$')
+    for module in basemodules:
+        if re.match(pattern, module):
+            error('Found empty module name in basemodules list ' + bold(basemoduleslist_path))
+            exit(1)
+        if module in debmap:
+            error('Basemodule ' + bold(module) + ' mapped to debian package(s) ' + arr2str(debmap[module]))
+            exit(1)
+    del pattern, basemoduleslist_path
+    info(str(len(basemodules)) + ' modules compiled into base module found')
+
+
+    # get distributed modules list
+    modules_distribution = []
+    moduleslist_path = modulestorage_path + '.modules'
+    if not os.path.isfile(moduleslist_path):
+        error('No .modules file found at ' + bold(moduleslist_path))
+        exit(1)
+    with open(moduleslist_path, 'r') as f:
+        modules_distribution = f.read().splitlines()
+    modules_distribution.sort()
+    # check for modules listed in both distribution and base modules
+    if len(modules_distribution) is 0:
+        error('Distribution module list ' + bold(moduleslist_path) + ' is empty')
+        exit(1)
+    pattern = re.compile(r'^\s*$')
+    for module in modules_distribution:
+        if not os.path.isfile(modulestorage_path + module + ending):
+            error('Can not find module package for module ' + bold(module) + ' at ' + bold(modulestorage_path + module + ending))
+            exit(1)
+        if re.match(pattern, module):
+            error('Found empty module name in distribution module list ' + bold(moduleslist_path))
+            exit(1)
+        if module not in debmap:
+            error('Module ' + bold(module) + ' has no mapping to debian packages')
+            exit(1)
+        if list_search(basemodules, module):
+            error('Module ' + bold(module) + ' is listed as basemodule and distribution module')
+            exit(1)
+    del pattern, moduleslist_path
+    info(str(len(modules_distribution)) + ' available distribution modules found')
+
+
+    if run_checks:
+        # check integrity of debian - package mapping
+        if apt_search:
+            report('Checking for invalid debian packes in mapping...     (this might take a while)')
+        for module, requirements in debmap.items():
+            if requirements != '!nodebian' and not list_search(modules_distribution, module):
+                error('Mapped module ' + bold(module) + ' has no policy package')
+                exit(1)
+
+            if (isinstance(requirements, str) and not requirements.strip()) or len(requirements) is 0:
+                error('Mapped module ' + bold(module) + ' has an empty requirement')
+                exit(1)
+
+            if requirements in ('!required', '!optional', '!nodebian'):
+                continue
+
+            if not apt_search:
+                continue
+
+            if isinstance(requirements, str):
+                if requirements == '!selfdep':
+                    found, err = package_exist(module)
+                    if not found:
+                        error('Mapped module ' + bold(module) + ' has no matching !selfdep package: ' + err)
+                elif requirements.startswith('!'):
+                    error('Invalid mapping keyword ' + bold(requirements) + ' for module ' + bold(module))
+                else:
+                    found, err = package_exist(requirements)
+                    if not found:
+                        error('Unknown package ' + bold(requirements) + ' in debian mapping for module ' + bold(module) + ': ' + err)
+            else:
+                for requirement in requirements:
+                    found, err = package_exist(requirement)
+                    if not found:
+                        error('Unknown package ' + bold(requirement) + ' in debian mapping for module ' + bold(module) + ': ' + err)
+
+
+    # get loaded/installed modules
+    modules_active_distribution = []
+    modules_active_user = []
+    modules_active_optional = []
+    modules_disabled_distribution = []
+    modules_disabled_user = []
+    pattern = re.compile(r'^(\d+)\s+([a-z0-9_]+)\s+(pp|cil)\s*(disabled)?$')
+    cp = subprocess.run(['/usr/sbin/semodule', '--list-modules=full', '--store', selinux_type], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, check=True)
+    for line in cp.stdout.splitlines():
+        m = re.match(pattern, line)
+        if m:
+            priority = m.group(1)
+            module = m.group(2)
+            module_format = m.group(3)
+            disabled = True if len(m.groups()) is 4 and m.group(4) == 'disabled' else False
+            if priority == '100':
+                if module_format != 'pp':
+                    error('Distribution module ' + bold(module) + ' installed with unsupported format: ' + bold(module_format))
+                    exit(1)
+                if disabled:
+                    modules_disabled_distribution.append(module)
+                else:
+                    if module in debmap and debmap[module] == '!optional':
+                        modules_active_optional.append(module)
+                    modules_active_distribution.append(module)
+            elif priority == '400':
+                if disabled:
+                    modules_disabled_user.append(module)
+                else:
+                    if module in debmap and debmap[module] == '!optional':
+                        modules_active_optional.append(module)
+                    modules_active_user.append(module)
+            else:
+                error('Unsupported module priority ' + bold(priority) + ' for active module ' + (module))
+                exit(1)
+        elif line == 'No modules.':
+            warn('semodule shows no loaded modules')
+            break
+        else:
+            error('Unsupported semodule output: ' + line)
+            error(str(cp))
+            exit(1)
+    del cp, pattern
+    modules_active_distribution.sort()
+    modules_active_user.sort()
+    modules_active_optional.sort()
+    modules_disabled_distribution.sort()
+    modules_disabled_user.sort()
+
+
+    # check active distribution modules
+    info(str(len(modules_active_distribution)) + ' active distribution module(s) found')
+    modules_foreign = list_difference(modules_active_distribution, modules_distribution)
+    if len(modules_foreign) is 0:
+        info('None unknown active distribution modules found')
+    else:
+        modules_unknown = []
+        modules_now_nodebian = []
+        for module in modules_foreign:
+            if module in debmap and debmap[module] is "!nodebian":
+                modules_now_nodebian.append(module)
+            else:
+                modules_unknown.append(module)
+        if len(modules_now_nodebian) is 0:
+            info('None nodebian active distribution modules found')
+        else:
+            warn(str(len(modules_now_nodebian)) + ' nodebian active distribution module(s) found: ' + bold(arr2str(modules_now_nodebian)))
+            force_modules_remove.extend(modules_now_nodebian)
+        if len(modules_unknown) is 0:
+            info('None unknown active distribution modules found')
+        else:
+            warn(str(len(modules_foreign)) + ' unknown active distribution module(s) found: ' + bold(arr2str(modules_foreign)))
+            force_modules_disable_unknown.extend(modules_foreign)
+    del modules_foreign
+    # check for update
+    modules_tocheck = list_intersect(modules_active_distribution, modules_distribution)
+    modules_toupdate = []
+    for module in modules_tocheck:
+        storage_path = modulestorage_path + module + ending
+        loaded_path = '/var/lib/selinux/' + selinux_type + '/active/modules/100/' + module + '/hll'
+        if not check_files_equals(storage_path, loaded_path):
+            modules_toupdate.append(module)
+    if len(modules_toupdate) is 0:
+        info('None outdated modules found')
+    else:
+        report(str(len(modules_toupdate)) + ' outdated module(s) found: ' + bold(arr2str(modules_toupdate)))
+        force_modules_update.extend(modules_toupdate)
+    del modules_toupdate, modules_tocheck
+
+
+    # display optional modules (checks are included in user and distribution ones)
+    if len(modules_active_optional) is 0:
+        info('None active optional modules found')
+    else:
+        report(str(len(modules_active_optional)) + ' active optional module(s) found: ' + bold(arr2str(modules_active_optional)))
+
+
+    # check disabled distribution modules
+    if len(modules_disabled_distribution) is 0:
+        info('None disabled distribution modules found')
+    else:
+        modules_foreign = list_difference(modules_disabled_distribution, modules_distribution)
+        if len(modules_foreign) is 0:
+            report(str(len(modules_disabled_distribution)) + ' disabled distribution module(s) found: ' + bold(arr2str(modules_disabled_distribution)))
+        else:
+            modules_unknown = []
+            modules_now_nodebian = []
+            for module in modules_foreign:
+                if module in debmap and debmap[module] is "!nodebian":
+                    modules_now_nodebian.append(module)
+                else:
+                    modules_unknown.append(module)
+            if len(modules_now_nodebian) is 0:
+                info('None nodebian disabled distribution modules found')
+            else:
+                warn(str(len(modules_now_nodebian)) + ' nodebian disabled distribution module(s) found: ' + bold(arr2str(modules_now_nodebian)))
+                force_modules_remove.extend(modules_now_nodebian)
+            if len(modules_unknown) is 0:
+                info('None unknown disbaled distribution modules found')
+            else:
+                warn(str(len(modules_foreign)) + ' unknown disabled distribution module(s) found, please inspect: ' + bold(arr2str(modules_foreign)))
+
+
+    # check active user modules
+    if len(modules_active_user) is 0:
+        info('None active user modules found')
+    else:
+        report(str(len(modules_active_user)) + ' active user module(s) found: ' + bold(arr2str(modules_active_user)))
+    modules_user_overwrite = list_intersect(modules_active_user, modules_active_distribution)
+    if len(modules_user_overwrite) is 0:
+        info('None active overwriting user module(s) found')
+    else:
+        warn(str(len(modules_user_overwrite)) + ' active overwriting user module(s) found: ' + bold(arr2str(modules_user_overwrite)))
+    del modules_user_overwrite
+    modules_user_nameclash = list_intersect(modules_active_user, list_difference(modules_distribution, modules_active_distribution))
+    if len(modules_user_nameclash) is 0:
+        info('None active name clashing user module(s) found')
+    else:
+        report(str(len(modules_user_nameclash)) + ' active nameclashing user module(s) found: ' + bold(arr2str(modules_user_nameclash)))
+    del modules_user_nameclash
+    modules_base_conflict = list_intersect(modules_active_user, basemodules)
+    if len(modules_base_conflict) is 0:
+        info('None active base conflicting user modules found')
+    else:
+        warn(str(len(modules_base_conflict)) + ' active base conflicting user module(s) found, please inspect: ' + bold(arr2str(modules_base_conflict)))
+    del modules_base_conflict
+
+
+    # check disabled user modules
+    if len(modules_disabled_user) is 0:
+        info('None disabled user modules found')
+    else:
+        report(str(len(modules_disabled_user)) + ' disabled user modules found: ' + bold(arr2str(modules_disabled_user)))
+
+
+    # check for review status of modules
+    if run_checks:
+        modules_checked = []
+        modules_checked_path = modulestorage_path + '.checkedmodules'
+        if not os.path.isfile(modules_checked_path):
+            error('No .checkedmodules file found at ' + bold(modules_checked_path))
+            exit(1)
+        with open(modules_checked_path, 'r') as f:
+            modules_checked = f.read().splitlines()
+        if len(modules_checked) is 0:
+            report('Checkedmodules list ' + bold(modules_checked_path) + ' is empty')
+        pattern = re.compile(r'^\s*$')
+        for module in modules_checked:
+            if re.match(pattern, module):
+                error('Found empty module name in checkedmodules list ' + bold(modules_checked_path))
+                exit(1)
+        info(str(len(modules_checked)) + ' checked modules found')
+        modules_checked.append('base')
+        modules_checked.sort()
+        modules_unknown_checked = list_difference(modules_checked, modules_distribution)
+        modules_unknown_checked = list_difference(modules_unknown_checked, basemodules)
+        if len(modules_unknown_checked) is not 0:
+            error('Unknown modules in checked list: ' + bold(arr2str(modules_unknown_checked)))
+            exit(1)
+        modules_notchecked = list_difference(modules_active_distribution, modules_checked)
+        if len(modules_notchecked) is 0:
+            modules_notchecked = list_difference(basemodules, modules_checked)
+            if len(modules_notchecked) is 0:
+                info('None installed unchecked modules found')
+            elif len(modules_notchecked) > 5:
+                import random
+                report(str(len(modules_notchecked)) + ' installed unchecked basemodules found, e.g.: ' + bold(arr2str(random.sample(modules_notchecked, 5))))
+            else:
+                report(str(len(modules_notchecked)) + ' installed unchecked basemodule(s) found: ' + bold(arr2str(modules_notchecked)))
+        elif len(modules_notchecked) > 5:
+            import random
+            report(str(len(modules_notchecked)) + ' installed unchecked modules found, e.g.: ' + bold(arr2str(random.sample(modules_notchecked, 5))))
+        else:
+            report(str(len(modules_notchecked)) + ' installed unchecked module(s) found: ' + bold(arr2str(modules_notchecked)))
+
+
+    # get installed debian packages
+    debian_packages = []
+    pattern = re.compile(r'^[a-zA-Z]{2}\s+([a-zA-Z0-9-+\.]+)(:[a-z0-9]+)?\s+\S+\s+\S+\s+(.*)$')
+    cp = subprocess.run(['/usr/bin/dpkg', '--list'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
+    for line in cp.stdout.decode('utf-8').splitlines():
+        m = re.match(pattern, line)
+        if m:
+            package = m.group(1)
+            debian_packages.append(package)
+    if len(debian_packages) is 0:
+        error('None dpkg packages found')
+        error(str(cp))
+        exit(1)
+    del cp, pattern
+
+    # check for dpkg trigger style input on stdin
+    if dpkg_input:
+        import select
+
+        if not select.select([sys.stdin,], [], [], 0.0)[0]:
+            error('No stdin data on dpkg trigger handling')
+        else:
+            # /var/cache/apt/archives/debsums_2.1.2_all.deb
+            pattern = re.compile(r'^/var/cache/apt/archives/([a-zA-Z0-9-+\.]+)_\S+\.deb$')
+            debian_packages_trigger = []
+            for line in sys.stdin:
+                m = re.match(pattern, line)
+                if m:
+                    package = m.group(1)
+                    debian_packages_trigger.append(package)
+                else:
+                    error('Unsupported dpkg trigger input: ' + line)
+            if len(debian_packages_trigger) is 0:
+                # might be package removal
+                info('None packages from dpkg trigger added')
+            else:
+                info(str(len(debian_packages_trigger)) + ' packages from dpkg trigger added: ' + arr2str(debian_packages_trigger))
+                debian_packages.extend(debian_packages_trigger)
+    debian_packages.sort()
+
+
+    # compare mapping to current state
+    for module, requirements in debmap.items():
+        if requirements == '!required':
+            if not list_search(modules_active_distribution, module):
+                report('Module ' + bold(module) + ' is marked as required module and should be installed on your system')
+                force_modules_install.append(module)
+            continue
+
+        if requirements == '!nodebian':
+            if list_search(modules_active_distribution, module):
+                report('Module ' + bold(module) + ' is marked !nodebian and is not needed on your system')
+                force_modules_remove.append(module)
+            continue
+
+        if requirements == '!optional':
+            continue
+
+        if requirements == '!selfdep':
+            if list_search(modules_active_distribution, module) and not list_search(debian_packages, module):
+                report('Module ' + bold(module) + ' is based on !selfdep not needed on this system')
+                force_modules_remove.append(module)
+            elif not list_search(modules_active_distribution, module) and list_search(debian_packages, module):
+                report('Module ' + bold(module) + ' is based on !selfdep needed on this system')
+                force_modules_install.append(module)
+            continue
+
+        if isinstance(requirements, str) and requirements.startswith('!'):
+            error('Unsupported module requirement keyword ' + bold(requirements))
+            exit(1)
+
+        # the next search requires a list of strings
+        if isinstance(requirements, str):
+            requirements = [requirements]
+
+        found = False
+        package = None
+        for p in requirements:
+            if list_search(debian_packages, p):
+                found = True
+                package = p
+                break
+
+        if found and not list_search(modules_active_distribution, module):
+            report('Module ' + bold(module) + ' is needed on this system for package ' + arr2str(package))
+            force_modules_install.append(module)
+        elif not found and list_search(modules_active_distribution, module):
+            report('Module ' + bold(module) + ' is not needed on this system cause none mapped package is installed: ' + arr2str(requirements))
+            force_modules_remove.append(module)
+
+
+    # prepare semodule command
+    cmd = '/usr/sbin/semodule --store ' + selinux_type
+    cmd_run = False
+
+    if selinux_active_type != selinux_type:
+        cmd += ' --noreload'
+
+    if len(force_modules_install) is 0:
+        info('No distribution modules to install')
+    elif not force_install:
+        report('Not installing ' + str(len(force_modules_install)) + ' distribution module(s): ' + bold(arr2str(force_modules_install)))
+    else:
+        report('Installing ' + str(len(force_modules_install)) + ' distribution module(s): ' + bold(arr2str(force_modules_install)))
+        cmd += ' --priority 100' + ''.join(' --install ' + modulestorage_path + module + ending for module in force_modules_install)
+        cmd_run = True
+
+    if len(force_modules_remove) is 0:
+        info('No distribution modules to remove')
+    elif not force_remove:
+        report('Not removing ' + str(len(force_modules_remove)) + ' distribution module(s): ' + bold(arr2str(force_modules_remove)))
+    else:
+        report('Removing ' + str(len(force_modules_remove)) + ' distribution module(s): ' + bold(arr2str(force_modules_remove)))
+        cmd += ' --priority 100' + ''.join(' --remove ' + x for x in force_modules_remove)
+        cmd_run = True
+
+    if len(force_modules_disable_unknown) is 0:
+        info('No unknown distribution modules to disable')
+    elif not force_disable_unknown:
+        report('Not disableling ' + str(len(force_modules_disable_unknown)) + ' unknown distribution module(s): ' + bold(arr2str(force_modules_disable_unknown)))
+    else:
+        warn('Disableling ' + str(len(force_modules_disable_unknown)) + ' unknown distribution module(s): ' + bold(arr2str(force_modules_disable_unknown)))
+        cmd += ' --priority 100' + ''.join(' --disable ' + x for x in force_modules_disable_unknown)
+        cmd_run = True
+
+    # eliminate removing modules
+    if force_remove:
+        force_modules_update.sort()
+        force_modules_remove.sort()
+        force_modules_update = list_difference(force_modules_update, force_modules_remove)
+    if len(force_modules_update) is 0:
+        info('No distribution modules to update')
+    elif not force_update:
+        report('Not updating ' + str(len(force_modules_update)) + ' distribution module(s): ' + bold(arr2str(force_modules_update)))
+    else:
+        report('Updating ' + str(len(force_modules_update)) + ' distribution module(s): ' + bold(arr2str(force_modules_update)))
+        cmd += ' --priority 100' + ''.join(' --install ' + modulestorage_path + module + ending for module in force_modules_update)
+        cmd_run = True
+
+    # remove all user modules
+    force_modules_remove_alluser = modules_active_user
+    if force_remove_alluser and len(force_modules_remove_alluser) is not 0:
+        warn('Removing ' + str(len(force_modules_remove_alluser)) + ' user module(s): ' + bold(arr2str(force_modules_remove_alluser)))
+        cmd += ' --priority 400' + ''.join(' --remove ' + module for module in force_modules_remove_alluser)
+        cmd_run = True
+
+    if not cmd_run:
+        info('No need to run semodule')
+    else:
+        import shlex
+
+        subprocess.run(shlex.split(cmd), universal_newlines=True, check=True)
+
+        info('Policy successfully updated')
+
+    if run_restorecon:
+        report('Checking for mislabeled files...            (this might take a while)')
+        cp = subprocess.run(['/sbin/restorecon', '-vv', '-R', '-n', '/'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, check=True)
+        context_wrong = False
+        context_missing = False
+        pattern = re.compile(r'^Warning no default label for')
+        for line in cp.stdout.splitlines():
+            m = re.match(pattern, line)
+            if m:
+                context_missing = True
+                notice(line)
+            else:
+                context_wrong = True
+                warn(line)
+        if not context_missing and not context_wrong:
+            info('All files properly labeled')
+        elif context_wrong:
+            warn('Some files needs to be relabled')
+        else:
+            notice('Some files have no default label')
+    else:
+        info('Not checking file contexts')
+
+    info('Policy management finished')
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

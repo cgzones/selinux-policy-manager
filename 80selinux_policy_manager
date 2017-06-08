@@ -1,0 +1,4 @@
+// SELinux policy manager
+DPkg::Pre-Install-Pkgs {"/usr/sbin/selinux_policy_manager --nocheck --quiet --force install --dpkg";};
+//DPkg::Pre-Invoke
+DPkg::Post-Invoke      {"/usr/sbin/selinux_policy_manager --nocheck --quiet --force remove";};

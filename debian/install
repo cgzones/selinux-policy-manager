@@ -1,0 +1,2 @@
+80selinux_policy_manager etc/apt/apt.conf.d
+selinux_policy_manager usr/sbin

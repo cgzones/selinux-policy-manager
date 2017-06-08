@@ -1,0 +1,20 @@
+Source: selinux-policy-manager
+VCS-Git: https://github.com/cgzones/selinux-policy-manager
+VCS-Browser: https://github.com/cgzones/selinux-policy-manager
+Priority: optional
+Section: admin
+Homepage: https://github.com/cgzones/selinux-policy-manager
+Maintainer: Christian Göttsche <cgzones@googlemail.com>
+Standards-Version: 3.9.8
+Build-Depends: debhelper (>= 10),
+               help2man
+
+Package: selinux-policy-manager
+Architecture: all
+Depends: policycoreutils,
+         python3,
+         ${misc:Depends}
+Recommends: selinux-policy-default
+Description: Management of SELinux reference policy modules
+ With this manager only needed SELinux policy module are loaded,
+ so the overall policy shrinks a lot.
