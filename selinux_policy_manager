@@ -276,7 +276,7 @@ debmap = {
         'inn'              : [ 'inn', 'inn2-inews', 'suck' ],
         'iodine'           : '!selfdep',
         'ipsec'            : [ 'strongswan-starter', 'racoon', 'strongswan-swanctl', 'ipsec-tools', 'openswan' ],
-        'iptables'         : [ 'ebtables', 'iptables', 'ipvsadm', 'nft' ],
+        'iptables'         : [ 'ebtables', 'iptables', 'ipvsadm', 'nftables' ],
         'irc'              : [ 'ircii', 'irssi', 'tinyirc' ],
         'ircd'             : [ 'ircd-irc2', 'ngircd' ],
         'irqbalance'       : '!selfdep',
