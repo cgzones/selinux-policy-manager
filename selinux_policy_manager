@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 
+import argparse
 import re
 import subprocess
 import os
 import sys
-import getopt
 import filecmp
+import textwrap
 
 
 # colorid: black 0, red 1, green 2, yellow 3
@@ -38,9 +39,9 @@ def notice(msg):
 def report(msg):
     custom_print(msg, 'REPORT ', 2)
 
-quiet = False
+QUIET = False
 def info(msg):
-    if not quiet:
+    if not QUIET:
         custom_print(msg, 'INFO   ', 2)
 
 def arr2str(array):
@@ -555,34 +556,29 @@ debmap = {
 }
 
 
-# help2man -s 1 selinux_policy_manager -n "SELinux policy module manager" -o selinux_policy_manager.1
-def usage():
-    print(os.path.basename(sys.argv[0]))
-    print('    -h --help                        Show this usage information')
-    print('    -V --version                     Show the version information')
-    print('    -q --quiet                       Show only minimal output, designed for script usage')
-    print('')
-    print('    -s --se_type     SELinux_type    Set SELinux policy type (e.g. default/refpolicy/...), like SELINUXTYPE=default in /etc/selinux/config')
-    print('                                     Defaults to current active type')
-    print('    -f --force       kind            Run proposed commands of type kind')
-    print('                                         Options are:')
-    print('                                             install:             install required distribution module(s)')
-    print('                                             remove:              remove unrequired distribution module(s)')
-    print('                                             disable-unknown:     disable unknown modules installed as distribution modules')
-    print('                                             update:              update outdated distribution module(s)')
-    print('                                             manage:              install && remove && disable-unknown && update')
-    print('                                             remove-alluser:      remove all user modules; only intended for upgrades')
-    print('    -c --nocheck                     Skip several checks infavour of performance')
-    print('    -D --dpkg                        Accept DPkg::Pre-Install-Pkgs formatted stdin')
-    print('    -R --restorecon                  Run \'restorecon -vv -R -n /\' after policy modification to test for mislabeled files')
-    print('                                     This will NOT alter file contexts')
-    print('    -a --apt_search                  Check all packages from mapping for existence in apt cache (very slow)')
+def main():
 
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument('-V', '--version', action='version', version='%(prog)s 0.1')
+    parser.add_argument('-q', '--quiet', action='store_true', help='output only minimal output, designed for script usage')
+    parser.add_argument('-s', '--se_type', help='SELinux policy store to use (e.g. default/refpolicy/...), like SELINUXTYPE=default in /etc/selinux/config\ndefaults to current active one')
+    parser.add_argument('-c', '--nocheck', action='store_true', help='skip several checks infavour of performance')
+    parser.add_argument('-D', '--dpkg', action='store_true', help='accept DPkg::Pre-Install-Pkgs formatted stdin')
+    parser.add_argument('-R', '--restorecon', action='store_true', help='run \'restorecon -vv -R -n /\' after policy modification to test for mislabeled files\nthis will NOT alter file contexts')
+    parser.add_argument('-a', '--apt_search', action='store_true', help='check all packages from mapping for existence in apt cache (very slow)')
+    parser.add_argument('-f', '--force', choices=['install', 'remove', 'disable-unknown', 'update', 'manage', 'remove-alluser'], help=textwrap.dedent('''\
+        perform module storage action
+          install:          install required distribution module(s)
+          remove:           remove unrequired distribution module(s)
+          disable-unknown:  disable unknown modules installed as distribution modules
+          update:           update outdated distribution module(s)
+          manage:           install & remove & disable-unknown & update
+          remove-alluser:   remove all user modules; only intended for upgrades'''))
+    args = parser.parse_args()
 
-def main(argv):
+    global QUIET #pylint: disable=global-statement
+    QUIET = args.quiet
 
-    run_checks = True
-    selinux_type = None
     force_install = False
     force_remove = False
     force_disable_unknown = False
@@ -592,65 +588,30 @@ def main(argv):
     force_modules_disable_unknown = []
     force_modules_update = []
     force_remove_alluser = False
-    dpkg_input = False
-    apt_search = False
-    run_restorecon = False
-    global quiet #pylint: disable=global-statement
 
-    try:
-        opts, args = getopt.getopt(argv, 'hVqs:f:cDaR', ['help', 'version', 'quiet', 'se_type=', 'force=', 'nocheck', 'dpkg', 'apt_search', 'restorecon'])
-    except getopt.GetoptError as err:
-        error('Invalid option(s): ' + str(err))
-        usage()
-        exit(1)
-    if len(args) is not 0:
-        error('Invalid option(s): ' + str(args))
-        exit(1)
-    for opt, arg in opts:
-        if opt in ('-h', '--help'):
-            usage()
-            exit(0)
-        elif opt in ('-V', '--version'):
-            print(os.path.basename(sys.argv[0]) + ' version 0.1dev')
-            exit(0)
-        elif opt in ('-q', '--quiet'):
-            quiet = True
-        elif opt in ('-s', '--se_type'):
-            selinux_type = arg
-        elif opt in ('-f', '--force'):
-            if arg == 'install':
-                force_install = True
-            elif arg == 'remove':
-                force_remove = True
-            elif arg == 'disable-unknown':
-                force_disable_unknown = True
-            elif arg == 'update':
-                force_update = True
-            elif arg == 'manage':
-                force_install = True
-                force_remove = True
-                force_disable_unknown = True
-                force_update = True
-            elif arg == 'remove-alluser':
-                force_remove_alluser = True
-            else:
-                error('Unknown --force option ' + arg)
-                exit(1)
-        elif opt in ('-c', '--nocheck'):
-            run_checks = False
-        elif opt in ('-D', '--dpkg'):
-            dpkg_input = True
-        elif opt in ('-a', '--apt_search'):
-            apt_search = True
-        elif opt in ('-R', '--restorecon'):
-            run_restorecon = True
+
+    if args.force:
+        if args.force == 'install':
+            force_install = True
+        elif args.force == 'remove':
+            force_remove = True
+        elif args.force == 'disable-unknown':
+            force_disable_unknown = True
+        elif args.force == 'update':
+            force_update = True
+        elif args.force == 'manage':
+            force_install = True
+            force_remove = True
+            force_disable_unknown = True
+            force_update = True
+        elif args.force == 'remove-alluser':
+            force_remove_alluser = True
         else:
-            error('Invalid option ' + opt)
-            usage()
+            error('Unknown --force option ' + args.force)
             exit(1)
 
-
     # get current active SELinux type
+    selinux_type = args.se_type
     selinux_active_type = None
     selinux_disabled = False
     pattern1 = re.compile(r'^Loaded policy name:\s*(\S+)$')
@@ -802,9 +763,9 @@ def main(argv):
     info(str(len(modules_distribution)) + ' available distribution modules found')
 
 
-    if run_checks:
+    if not args.nocheck:
         # check integrity of debian - package mapping
-        if apt_search:
+        if args.apt_search:
             report('Checking for invalid debian packes in mapping...     (this might take a while)')
         for module, requirements in debmap.items():
             if requirements != '!nodebian' and not list_search(modules_distribution, module):
@@ -818,7 +779,7 @@ def main(argv):
             if requirements in ('!required', '!optional', '!nodebian'):
                 continue
 
-            if not apt_search:
+            if not args.apt_search:
                 continue
 
             if isinstance(requirements, str):
@@ -995,7 +956,7 @@ def main(argv):
 
 
     # check for review status of modules
-    if run_checks:
+    if not args.nocheck:
         modules_checked = []
         modules_checked_path = modulestorage_path + '.checkedmodules'
         if not os.path.isfile(modules_checked_path):
@@ -1051,7 +1012,7 @@ def main(argv):
     del cp, pattern
 
     # check for dpkg trigger style input on stdin
-    if dpkg_input:
+    if args.dpkg:
         import select
 
         if not select.select([sys.stdin,], [], [], 0.0)[0]:
@@ -1190,7 +1151,7 @@ def main(argv):
 
         info('Policy successfully updated')
 
-    if run_restorecon:
+    if args.restorecon:
         report('Checking for mislabeled files...            (this might take a while)')
         cp = subprocess.run(['/sbin/restorecon', '-vv', '-R', '-n', '/'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, check=True)
         context_wrong = False
@@ -1217,4 +1178,4 @@ def main(argv):
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main()
