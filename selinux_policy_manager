@@ -46,8 +46,8 @@ def info(msg):
 
 def arr2str(array):
     if isinstance(array, str):
-        return array + ' '
-    return ''.join(x + ' ' for x in array)
+        return array
+    return ' '.join(array)
 
 # return True if both files have the same content, else False
 def check_files_equals(a, b):
@@ -573,7 +573,7 @@ def main():
           disable-unknown:  disable unknown modules installed as distribution modules
           update:           update outdated distribution module(s)
           manage:           install & remove & disable-unknown & update
-          remove-alluser:   remove all user modules; only intended for upgrades'''))
+          remove-alluser:   remove all user modules; only intended for upgrades or error recovery'''))
     args = parser.parse_args()
 
     global QUIET #pylint: disable=global-statement
@@ -588,7 +588,6 @@ def main():
     force_modules_disable_unknown = []
     force_modules_update = []
     force_remove_alluser = False
-
 
     if args.force:
         if args.force == 'install':
