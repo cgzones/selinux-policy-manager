@@ -14,10 +14,10 @@ import textwrap
 def custom_print(msg, prefix, colorid):
     if sys.stdout.isatty():
         # running in a real terminal
-        print(os.path.basename(sys.argv[0]) + ': \033[1;' + str(30 + colorid) + 'm' + prefix + '\033[0m ' + msg)
+        print('\033[1;' + str(30 + colorid) + 'm' + prefix + '\033[0m ' + msg)
     else:
         # no color support, e.g. redirection
-        print(os.path.basename(sys.argv[0]) + ': ' + prefix + ' ' + msg)
+        print(prefix + ' : ' + msg)
 
 def bold(msg):
     if sys.stdout.isatty():
