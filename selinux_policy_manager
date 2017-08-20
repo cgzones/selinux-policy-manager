@@ -294,6 +294,7 @@ debmap = {
         'ktalk'            : [ 'talkd', 'inetutils-talkd' ],
         'l2tp'             : 'xl2tpd',
         'ldap'             : 'slapd',
+        'libmtp'           : 'mtp-tools',
         'lightsquid'       : '!selfdep',
         'lircd'            : 'lirc',
         'lldpad'           : '!selfdep',
