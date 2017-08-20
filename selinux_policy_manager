@@ -199,6 +199,7 @@ debmap = {
         'cdrecord'         : [ 'wodim', 'growisofs' ],
         'certmonger'       : '!selfdep',
         'cfengine'         : 'cfengine3',
+        'cgmanager'        : '!selfdep',
         'cgroup'           : [ 'cgroup-bin' , 'cgroup-tools' ],
         'chkrootkit'       : '!selfdep',
         'chronyd'          : 'chrony',
