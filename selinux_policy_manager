@@ -266,6 +266,7 @@ debmap = {
         'gpg'              : 'gpgv',
         'gpm'              : '!selfdep',
         'gpsd'             : '!selfdep',
+        'gssproxy'         : '!selfdep',
         'hadoop'           : 'zookeeperd',
         'hal'              : 'radeontool',
         'hddtemp'          : '!selfdep',
